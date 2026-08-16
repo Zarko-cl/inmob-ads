@@ -1,0 +1,474 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+//
+// Modelo inicial (M1): Organization + User.
+// Ver docs/MODELO_DATOS.md para el modelo completo (Property, Campaign, etc.),
+// que se irá agregando módulo a módulo.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum OrganizationStatus {
+  ACTIVA
+  SUSPENDIDA
+}
+
+enum UserRole {
+  ADMIN_AGENCIA
+  ADMIN_INMOBILIARIA
+  EDITOR
+  SOLO_LECTURA
+}
+
+// Empresa inmobiliaria (tenant). Ver ARQUITECTURA.md sección 4 (multi-tenancy).
+model Organization {
+  id        String             @id @default(cuid())
+  name      String
+  rut       String?
+  status    OrganizationStatus @default(ACTIVA)
+  // Cumplimiento (M9). La Ley 21.719 exige informar el tratamiento de datos
+  // personales; sin esta URL no se pueden publicar campañas que capten datos
+  // (formulario instantáneo, WhatsApp).
+  privacyPolicyUrl String?
+  // Meses que se conservan los datos de un lead antes de eliminarlos.
+  dataRetentionMonths Int      @default(24)
+  createdAt DateTime           @default(now())
+
+  users           User[]
+  metaConnections MetaConnection[]
+  campaigns       Campaign[]
+  properties      Property[]
+  strategies      Strategy[]
+  auditLogs       AuditLog[]
+
+  @@map("organizations")
+}
+
+// Usuario interno del aplicativo. organizationId es null para usuarios de agencia
+// que administran varias inmobiliarias (ver MODELO_DATOS.md).
+model User {
+  id             String    @id @default(cuid())
+  organizationId String?
+  email          String    @unique
+  passwordHash   String
+  role           UserRole
+  createdAt      DateTime  @default(now())
+  lastLoginAt    DateTime?
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sessions     Session[]
+
+  @@index([organizationId])
+  @@map("users")
+}
+
+// Sesión de login activa (M2). Se guarda el hash del token, no el token en sí:
+// si alguien lee la base de datos no puede usarlo para iniciar sesión como el usuario.
+model Session {
+  id        String   @id // sha256(token) en hexadecimal
+  userId    String
+  expiresAt DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+enum MetaConnectionStatus {
+  ACTIVA
+  EXPIRADA
+  REVOCADA
+}
+
+enum MetaTokenType {
+  USER
+  SYSTEM_USER
+}
+
+// Vínculo OAuth de una Organization con su Business Manager de Meta (M1).
+// El token se guarda cifrado (ver lib/crypto.ts); nunca en texto plano.
+model MetaConnection {
+  id                        String               @id @default(cuid())
+  organizationId            String
+  metaBusinessId            String
+  adAccountId               String
+  pageId                    String?
+  whatsappBusinessAccountId String?
+  instagramActorId          String?
+  accessTokenEncrypted      String
+  tokenType                 MetaTokenType        @default(USER)
+  status                    MetaConnectionStatus @default(ACTIVA)
+  connectedAt               DateTime             @default(now())
+  connectedByUserId         String?
+  // Uso de la cuota de la Marketing API (M10). Meta lo informa en el encabezado
+  // X-Business-Use-Case-Usage de cada respuesta.
+  apiUsagePercent           Int?
+  apiAccessTier             String?
+  apiUsageAt                DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaigns    Campaign[]
+
+  @@index([organizationId])
+  @@map("meta_connections")
+}
+
+// Objetivo ODAX de Meta (ver M3 del plan). No lo elige el usuario directamente:
+// se deriva del tipo de campaña (M5), porque Meta solo acepta ciertas combinaciones
+// de objetivo + destino + optimización — ver lib/meta-campaign-types.ts.
+enum CampaignObjective {
+  TRAFICO
+  INTERACCION
+  LEADS
+  VENTAS
+  RECONOCIMIENTO
+}
+
+// Destino del clic del anuncio (M5). Determina el objetivo, el destination_type
+// y el optimization_goal que se envían a la Marketing API.
+enum CampaignType {
+  LANDING_SITIO_WEB
+  FORMULARIO_INSTANTANEO
+  WHATSAPP
+  INSTAGRAM_MESSENGER
+  // Botón para llamar al asesor desde el celular.
+  LLAMADA_TELEFONO
+  // Reconocimiento por alcance: saturar una zona antes de una preventa.
+  ALCANCE_PROYECTO
+}
+
+enum BudgetType {
+  DIARIO
+  TOTAL
+}
+
+enum CampaignStatus {
+  BORRADOR // todavía no se envió a Meta
+  EN_META // se creó en Meta (siempre pausada — ver CLAUDE.md, regla de seguridad)
+  ERROR // Meta rechazó la creación; ver errorMessage
+}
+
+// Campaña (M3). Mapea al objeto Campaign de la Marketing API una vez publicada.
+model Campaign {
+  id               String            @id @default(cuid())
+  organizationId   String
+  metaConnectionId String
+  propertyId       String?
+  strategyId       String? // si la campaña nació de una estrategia
+  creativeMediaId  String? // foto elegida como creativo del anuncio (M8)
+  // Formato del anuncio. En CARRUSEL se usan las tarjetas de `carouselCards` en vez
+  // de `creativeMediaId`. Límites verificados contra la API: 2 a 10 tarjetas
+  // (ver lib/carrusel.ts).
+  adFormat         AdFormat          @default(IMAGEN_UNICA)
+  name             String
+  campaignType     CampaignType      @default(LANDING_SITIO_WEB)
+  destinationUrl   String? // solo para LANDING_SITIO_WEB
+  objective        CampaignObjective
+  budgetType       BudgetType
+  budgetAmountClp  Int
+  startDate        DateTime?
+  status           CampaignStatus    @default(BORRADOR)
+  metaCampaignId   String?
+  errorMessage     String?
+  // Estado real leído desde Meta (M10). `status` es lo que sabe la app;
+  // `effectiveStatus` es lo que Meta reporta de verdad (ACTIVE, PAUSED,
+  // DISAPPROVED, PENDING_REVIEW, IN_PROCESS...).
+  effectiveStatus  String?
+  lastSyncedAt     DateTime?
+  createdByUserId  String?
+  createdAt        DateTime          @default(now())
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  metaConnection MetaConnection  @relation(fields: [metaConnectionId], references: [id])
+  property       Property?       @relation(fields: [propertyId], references: [id])
+  strategy       Strategy?       @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+  creativeMedia  PropertyMedia?  @relation(fields: [creativeMediaId], references: [id])
+  adSets         AdSet[]
+  copyVariants   CopyVariant[]
+  complianceChecks ComplianceCheck[]
+  carouselCards  CarouselCard[]
+
+  @@index([organizationId])
+  @@index([propertyId])
+  @@index([strategyId])
+  @@map("campaigns")
+}
+
+// Estrategia (conjunto de campañas dimensionado por presupuesto mensual).
+// Las reglas de cuántas campañas/conjuntos/anuncios viven en lib/estrategia.ts.
+model Strategy {
+  id               String   @id @default(cuid())
+  organizationId   String
+  propertyId       String?
+  name             String
+  monthlyBudgetClp Int
+  nivel            Int // 1, 2 o 3 según el tramo de presupuesto
+  createdByUserId  String?
+  createdAt        DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaigns    Campaign[]
+
+  @@index([organizationId])
+  @@map("strategies")
+}
+
+enum CopyGeneratedBy {
+  IA
+  MANUAL
+}
+
+// Variante de copy publicitario (M7). Se generan varias para poder probar A/B y
+// para que el usuario elija/edite antes de publicar. Los límites de caracteres de
+// Meta se validan en lib/copy-limits.ts (compartido entre servidor y navegador).
+model CopyVariant {
+  id            String          @id @default(cuid())
+  campaignId    String
+  primaryText   String
+  headline      String
+  description   String?
+  generatedBy   CopyGeneratedBy @default(IA)
+  promptVersion String?
+  approved      Boolean         @default(false)
+  createdAt     DateTime        @default(now())
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  ads      Ad[]
+
+  @@index([campaignId])
+  @@map("copy_variants")
+}
+
+// Conjunto de anuncios (M3). Mapea a Meta Ad Set. La segmentación real (M6) todavía
+// no existe — por ahora se crea con el default del proyecto: Chile, sin restricciones
+// de Special Ad Category (ver sección 3 del plan de trabajo).
+enum TargetingMode {
+  MANUAL
+  AUTOMATICO // Advantage+ Audience: Meta amplía la audiencia según el objetivo
+}
+
+model AdSet {
+  id         String         @id @default(cuid())
+  campaignId String
+  name       String
+  status     CampaignStatus @default(BORRADOR)
+  destinationType String? // WEBSITE, WHATSAPP, MESSENGER, INSTAGRAM_DIRECT, ON_AD (M5)
+  // Presupuesto diario de ESTE conjunto. Con una campaña suelta hay uno solo y
+  // hereda el de la campaña; en una estrategia cada conjunto recibe su parte.
+  dailyBudgetClp Int?
+  // Segmentación (M6). targetingJson guarda el objeto `targeting` tal como lo espera
+  // la Marketing API: es un objeto complejo y cambiante, por eso no se normaliza en
+  // columnas (ver nota en docs/MODELO_DATOS.md).
+  targetingMode TargetingMode @default(MANUAL)
+  targetingJson Json?
+  // La misma segmentación, pero como la eligió el usuario (con nombres de comunas
+  // e intereses). targetingJson solo guarda los identificadores que pide Meta, así
+  // que sin esto no se podría volver a mostrar el formulario con lo elegido.
+  targetingConfigJson Json?
+  // true solo si la segmentación incluye EE. UU., Canadá o Europa, donde Meta
+  // obliga a la Special Ad Category de vivienda. No aplica a Chile.
+  specialAdCategoryActive Boolean @default(false)
+  metaAdSetId String?
+  errorMessage String?
+  effectiveStatus String?
+  lastSyncedAt DateTime?
+  createdAt  DateTime       @default(now())
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  ads      Ad[]
+
+  @@map("ad_sets")
+}
+
+// Anuncio individual (M8 parte 2). Une un conjunto de anuncios con un creativo
+// (imagen + copy). Se crea siempre en PAUSED, igual que campaña y conjunto.
+model Ad {
+  id             String         @id @default(cuid())
+  adSetId        String
+  copyVariantId  String?
+  // Foto de ESTE anuncio. En una campaña suelta hereda la de la campaña; en una
+  // estrategia cada anuncio del conjunto usa una foto distinta.
+  creativeMediaId String?
+  metaAdId       String?
+  metaCreativeId String?
+  metaImageHash  String?
+  status         CampaignStatus @default(BORRADOR)
+  errorMessage   String?
+  effectiveStatus String?
+  // Motivos de rechazo o advertencias que informa Meta (issues_info). Solo viene
+  // cuando hay algo que corregir.
+  issuesInfo     Json?
+  lastSyncedAt   DateTime?
+  createdAt      DateTime       @default(now())
+
+  adSet         AdSet          @relation(fields: [adSetId], references: [id], onDelete: Cascade)
+  copyVariant   CopyVariant?   @relation(fields: [copyVariantId], references: [id])
+  creativeMedia PropertyMedia? @relation(fields: [creativeMediaId], references: [id])
+
+  @@index([adSetId])
+  @@map("ads")
+}
+
+enum PropertyType {
+  CASA
+  DEPARTAMENTO
+  OFICINA
+  TERRENO
+}
+
+enum PropertyOperation {
+  VENTA
+  ARRIENDO
+}
+
+enum PropertyCurrency {
+  CLP
+  UF
+}
+
+enum PropertyStatus {
+  DISPONIBLE
+  RESERVADA
+  VENDIDA_ARRENDADA
+}
+
+// Ficha de propiedad (M4) — fuente única de datos para campañas, creativos y copys.
+// Los datos del asesor a cargo van directo en la propiedad (todavía no existe una
+// entidad "Agente" separada — se agrega si en el futuro hace falta reutilizarla
+// entre varias propiedades).
+model Property {
+  id           String            @id @default(cuid())
+  organizationId String
+  title        String
+  propertyType PropertyType
+  operation    PropertyOperation
+  address      String?
+  comuna       String?
+  region       String?
+  price        Float
+  currency     PropertyCurrency  @default(CLP)
+  surfaceM2    Float?
+  bedrooms     Int?
+  bathrooms    Int?
+  description  String?
+  status       PropertyStatus    @default(DISPONIBLE)
+  agentName    String?
+  agentEmail   String?
+  agentPhone   String?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaigns    Campaign[]
+  media        PropertyMedia[]
+
+  @@index([organizationId])
+  @@map("properties")
+}
+
+// Foto de una propiedad (M8). El archivo vive en el servicio de almacenamiento
+// (ver lib/storage.ts); acá solo se guarda la referencia.
+// `pathname` es la ruta interna dentro del store, necesaria para poder borrar el
+// archivo después — la `url` pública no sirve para eso.
+model PropertyMedia {
+  id         String   @id @default(cuid())
+  propertyId String
+  url        String
+  pathname   String
+  sizeBytes  Int?
+  contentType String?
+  orden      Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  property      Property       @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  campaigns     Campaign[]
+  ads           Ad[]
+  carouselCards CarouselCard[]
+
+  @@index([propertyId])
+  @@map("property_media")
+}
+
+// --- Cumplimiento normativo (M9) ---
+
+enum SeveridadHallazgo {
+  BLOQUEA // impide publicar
+  ADVIERTE // se puede publicar, pero conviene revisar
+}
+
+enum NormaCumplimiento {
+  META_AD_STANDARDS // normas de publicidad de Meta (universales)
+  LEY_19496 // protección al consumidor (Chile) — publicidad engañosa
+  LEY_21719 // protección de datos personales (Chile)
+  REQUISITOS_TECNICOS // lo que Meta necesita para aceptar el objeto
+}
+
+// Resultado de la revisión previa a publicar. Se guarda (no solo se muestra) para
+// tener trazabilidad ante un reclamo, una fiscalización o una revisión de Meta.
+model ComplianceCheck {
+  id         String            @id @default(cuid())
+  campaignId String
+  codigo     String
+  norma      NormaCumplimiento
+  severidad  SeveridadHallazgo
+  mensaje    String
+  aprobado   Boolean // true si la revisión pasó sin este hallazgo
+  checkedAt  DateTime          @default(now())
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@map("compliance_checks")
+}
+
+// Bitácora de auditoría (M9): quién hizo qué y cuándo. Registra acciones sensibles
+// —publicar, activar (gasta dinero), pausar, conectar/desconectar cuentas— para
+// poder reconstruir qué pasó ante un reclamo.
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  actorUserId    String?
+  actorEmail     String?
+  action         String
+  entityType     String
+  entityId       String?
+  metadataJson   Json?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// --- Anuncios por secuencia / carrusel ---
+
+enum AdFormat {
+  IMAGEN_UNICA
+  CARRUSEL
+}
+
+// Tarjeta de un carrusel. El formato es a nivel de campaña: todos sus anuncios usan
+// las mismas tarjetas y se diferencian por el texto principal (variante de copy).
+model CarouselCard {
+  id              String  @id @default(cuid())
+  campaignId      String
+  propertyMediaId String
+  headline        String?
+  description     String?
+  orden           Int     @default(0)
+
+  campaign Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  media    PropertyMedia @relation(fields: [propertyMediaId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@map("carousel_cards")
+}

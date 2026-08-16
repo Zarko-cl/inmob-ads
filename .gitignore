@@ -1,0 +1,31 @@
+# --- Secretos: NUNCA se suben ---
+# .env.local tiene el App Secret de Meta, la clave de OpenAI, la contraseña de la
+# base de datos y la llave de cifrado de los tokens. Si esto llega a GitHub hay que
+# rotar TODAS esas credenciales, aunque el repositorio sea privado.
+.env
+.env.*
+!.env.example
+
+# --- Fotos subidas por los usuarios ---
+# Son archivos de datos, no código. En producción viven en el almacenamiento en la
+# nube (ver lib/storage.ts).
+app/uploads/
+
+# --- Dependencias y artefactos de compilación ---
+node_modules/
+.next/
+out/
+build/
+*.tsbuildinfo
+app/generated/
+
+# --- Herramientas ---
+.vercel
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+
+# --- Archivos temporales de trabajo ---
+*.mjs.bak
+q.mjs
