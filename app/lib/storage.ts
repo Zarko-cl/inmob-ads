@@ -28,8 +28,18 @@ export function carpetaLocal(): string {
 }
 
 export function storageConfigurado(): boolean {
-  if (proveedorActivo() === "vercel-blob") return Boolean(process.env.BLOB_READ_WRITE_TOKEN);
-  return true; // el modo local no necesita configuración
+  if (proveedorActivo() === "vercel-blob") {
+    // Al conectar el store, Vercel inyecta credenciales OIDC de corta duración
+    // (BLOB_STORE_ID) y además un token largo de respaldo (BLOB_READ_WRITE_TOKEN).
+    // Cualquiera de los dos alcanza; fuera de Vercel solo existe el segundo.
+    return Boolean(process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID);
+  }
+  // El modo local no necesita configuración, pero SOLO sirve en un computador.
+  // Las funciones de Vercel tienen el disco en solo lectura (salvo /tmp, que se
+  // borra entre invocaciones), así que ahí guardarArchivo() fallaría a mitad de
+  // la subida. Vale más avisarlo antes: la UI ya muestra un aviso y desactiva el
+  // botón cuando esto devuelve false.
+  return process.env.VERCEL !== "1";
 }
 
 export type ArchivoGuardado = {

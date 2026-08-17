@@ -16,7 +16,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   if (!storageConfigurado()) {
     return Response.json(
-      { error: "El almacenamiento de archivos no está configurado (ver app/.env.local)." },
+      {
+        error:
+          "El almacenamiento de archivos no está configurado. En el servidor hay que " +
+          "usar STORAGE_PROVIDER=vercel-blob con su store conectado; el modo local " +
+          "solo funciona en un computador.",
+      },
       { status: 500 }
     );
   }
