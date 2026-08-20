@@ -13,6 +13,13 @@ const GRAPH_URL = `https://graph.facebook.com/${API_VERSION}`;
 // WhatsApp, porque el número de WhatsApp Business cuelga de la Página, y son además
 // los permisos que exige la documentación de Click-to-WhatsApp.
 //
+// `whatsapp_business_management` se agregó el 20 ago 2026. Con los permisos de Página
+// ya se puede leer la Página, pero enumerar las cuentas de WhatsApp Business
+// (`GET /{business-id}/owned_whatsapp_business_accounts`) seguía respondiendo
+// "(#200) You do not have permission to access this field". Es un permiso avanzado:
+// Facebook lo concede a quien tenga un rol en la app (administrador, desarrollador o
+// tester) sin App Review, pero para usuarios ajenos exigirá la revisión (M13).
+//
 // Ojo: cambiar esta lista NO afecta a los tokens ya emitidos. Hay que desconectar y
 // volver a conectar para que Facebook pida los permisos nuevos.
 const SCOPES = [
@@ -22,6 +29,7 @@ const SCOPES = [
   "pages_show_list",
   "pages_read_engagement",
   "pages_manage_ads",
+  "whatsapp_business_management",
 ];
 
 function requireEnv(name: string): string {
