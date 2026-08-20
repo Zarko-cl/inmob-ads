@@ -19,7 +19,12 @@ import path from "path";
 import { EXTENSION_POR_TIPO } from "@/lib/storage-limits";
 
 export function proveedorActivo(): "local" | "vercel-blob" {
-  return process.env.STORAGE_PROVIDER === "vercel-blob" ? "vercel-blob" : "local";
+  // trim(): en el panel de Vercel el valor se escribe en un cuadro de varias
+  // líneas, así que es muy fácil que quede un espacio o un salto de línea al
+  // final sin que se vea. Sin esto, "vercel-blob\n" no es igual a "vercel-blob"
+  // y la app se cae a modo local sin dar ninguna pista de por qué.
+  const valor = process.env.STORAGE_PROVIDER?.trim().toLowerCase();
+  return valor === "vercel-blob" ? "vercel-blob" : "local";
 }
 
 export function carpetaLocal(): string {
@@ -40,6 +45,26 @@ export function storageConfigurado(): boolean {
   // la subida. Vale más avisarlo antes: la UI ya muestra un aviso y desactiva el
   // botón cuando esto devuelve false.
   return process.env.VERCEL !== "1";
+}
+
+// Explica POR QUÉ no se puede subir, para que el aviso de la pantalla sea
+// accionable en vez de decir solo "no está configurado". Devuelve null cuando
+// todo está en orden. No expone ningún secreto: solo dice qué falta.
+export function motivoStorageNoConfigurado(): string | null {
+  if (storageConfigurado()) return null;
+
+  if (proveedorActivo() === "vercel-blob") {
+    return (
+      "El proveedor es Vercel Blob, pero no llegaron sus credenciales. " +
+      "Falta conectar el store al proyecto (o volver a desplegar después de conectarlo)."
+    );
+  }
+
+  return (
+    'El proveedor activo es "local", que no funciona en un servidor porque el disco ' +
+    "es de solo lectura. La variable STORAGE_PROVIDER debe valer exactamente " +
+    "vercel-blob, y hay que redesplegar después de cambiarla."
+  );
 }
 
 export type ArchivoGuardado = {

@@ -44,11 +44,13 @@ export function FotosPanel({
   fotos,
   uso,
   storageConfigurado,
+  motivoStorage,
 }: {
   propertyId: string;
   fotos: Foto[];
   uso: Record<string, UsoFoto>;
   storageConfigurado: boolean;
+  motivoStorage?: string | null;
 }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -232,7 +234,11 @@ export function FotosPanel({
       {!storageConfigurado && (
         <div className="mt-3 flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-400">
           <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-          El almacenamiento de archivos no está configurado. Hasta entonces no se pueden subir fotos.
+          <span>
+            El almacenamiento de archivos no está configurado. Hasta entonces no se pueden
+            subir fotos.
+            {motivoStorage && <span className="mt-1 block opacity-90">{motivoStorage}</span>}
+          </span>
         </div>
       )}
 

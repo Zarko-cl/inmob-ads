@@ -4,7 +4,7 @@ import { ArrowLeft, AlertTriangle } from "lucide-react";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
 import { resolveOrganizationForUser } from "@/lib/org";
-import { storageConfigurado } from "@/lib/storage";
+import { storageConfigurado, motivoStorageNoConfigurado } from "@/lib/storage";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -263,6 +263,7 @@ export default async function PropiedadDetallePage({
             fotos={property.media}
             uso={usoFotos}
             storageConfigurado={storageConfigurado()}
+            motivoStorage={motivoStorageNoConfigurado()}
           />
         </div>
 
