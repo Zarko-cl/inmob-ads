@@ -60,10 +60,19 @@ export function motivoStorageNoConfigurado(): string | null {
     );
   }
 
+  // Mostrar el valor crudo que ve el servidor: es lo único que distingue "la
+  // variable no llegó" de "llegó con otro contenido". No es un secreto (vale
+  // "local" o "vercel-blob"), así que no hay nada que filtrar acá.
+  const crudo = process.env.STORAGE_PROVIDER;
+  const visto =
+    crudo === undefined
+      ? "no está definida"
+      : `${JSON.stringify(crudo.slice(0, 40))} (${crudo.length} caracteres)`;
+
   return (
     'El proveedor activo es "local", que no funciona en un servidor porque el disco ' +
     "es de solo lectura. La variable STORAGE_PROVIDER debe valer exactamente " +
-    "vercel-blob, y hay que redesplegar después de cambiarla."
+    `vercel-blob, y hay que redesplegar después de cambiarla. El servidor la ve así: ${visto}.`
   );
 }
 
